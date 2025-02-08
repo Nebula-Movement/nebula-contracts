@@ -1,0 +1,26 @@
+{
+  "name": "ai-prompt-marketplace",
+  "version": "1.0.0",
+  "description": "AI Prompt Marketplace Smart Contract on Movement",
+  "type": "module",
+  "main": "scripts/deploy.ts",
+  "scripts": {
+    "deploy": "ts-node scripts/deploy.ts",
+    "compile": "aptos move compile",
+    "test": "aptos move test",
+    "transfer": "ts-node scripts/transfer.ts"
+  },
+  "dependencies": {
+    "aptos": "^1.20.0"
+  },
+  "devDependencies": {
+    "@aptos-labs/ts-sdk": "^1.33.2",
+    "@types/node": "^20.17.17",
+    "dotenv": "^16.4.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
