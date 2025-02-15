@@ -8,9 +8,10 @@ module prompt_marketplace::prompt_marketplace {
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::event;
     use aptos_framework::account;
+    use aptos_std::table::{Self, Table};
 
-    // NFT Resource Structs
-    struct PromptNFT has key, store {
+    // Prompt Resource Structs
+    struct Prompt has store {
         id: u64,
         collection_id: u64,  // Reference to collection ID
         collection_name: String,
@@ -20,20 +21,25 @@ module prompt_marketplace::prompt_marketplace {
         owner: address
     }
 
-    struct Collection has key {
+    // Store to store user's Prompts
+    struct UserPromptStore has key {
+        prompts: vector<Prompt>
+    }
+
+    struct Collection has key, store {
         id: u64,  // Unique collection ID
         name: String,
         description: String,
         uri: String,
         total_supply: u64,
         max_supply: u64,
-        mint_fee_per_nft: u64,
+        mint_fee_per_prompt: u64,
         creator_addr: address,
         public_mint_limit_per_addr: u64,
-        paused: bool  // New field for emergency pause
+        paused: bool 
     }
 
-    struct MintTracker has key {
+    struct MintTracker has key, store {
         collection_id: u64,  // Reference to collection ID
         mints_per_addr: vector<address>,  // Track mints per address
     }
@@ -54,7 +60,7 @@ module prompt_marketplace::prompt_marketplace {
         pending_admin_addr: Option<address>,
     }
 
-    struct CollectionStats has key {
+    struct CollectionStats has key, store {
         collection_id: u64,
         total_volume: u64,
         num_holders: u64,
@@ -62,26 +68,33 @@ module prompt_marketplace::prompt_marketplace {
         last_mint_time: u64
     }
 
-    struct CollectionEvents has key {
-        mint_events: event::EventHandle<NFTMintedEvent>,
-        batch_mint_events: event::EventHandle<BatchNFTMintedEvent>,
+    struct CollectionEvents has key, store {
+        mint_events: event::EventHandle<PromptMintedEvent>,
+        batch_mint_events: event::EventHandle<BatchPromptMintedEvent>,
         pause_events: event::EventHandle<CollectionPausedEvent>
     }
 
+    struct CollectionStore has key {
+        collections: Table<u64, Collection>,
+        mint_trackers: Table<u64, MintTracker>,
+        collection_stats: Table<u64, CollectionStats>,
+        collection_events: Table<u64, CollectionEvents>
+    }
+
     #[event]
-    struct NFTMintedEvent has drop, store {
+    struct PromptMintedEvent has drop, store {
         collection_id: u64,
-        token_id: u64,
+        prompt_id: u64,
         recipient: address,
         mint_price: u64,
         timestamp: u64
     }
 
     #[event]
-    struct BatchNFTMintedEvent has drop, store {
+    struct BatchPromptMintedEvent has drop, store {
         collection_id: u64,
-        start_token_id: u64,
-        end_token_id: u64,
+        start_prompt_id: u64,
+        end_prompt_id: u64,
         recipient: address,
         total_mint_price: u64,
         timestamp: u64
@@ -116,6 +129,12 @@ module prompt_marketplace::prompt_marketplace {
             admin_addr: signer::address_of(sender),
             pending_admin_addr: option::none(),
         });
+        move_to(sender, CollectionStore {
+            collections: table::new(),
+            mint_trackers: table::new(),
+            collection_stats: table::new(),
+            collection_events: table::new()
+        });
     }
 
     public entry fun create_collection(
@@ -124,47 +143,52 @@ module prompt_marketplace::prompt_marketplace {
         description: String,
         uri: String,
         max_supply: u64,
-        mint_fee_per_nft: u64,
+        mint_fee_per_prompt: u64,
         public_mint_limit_per_addr: u64
-    ) acquires Registry {
+    ) acquires Registry, CollectionStore {
         let sender_addr = signer::address_of(sender);
         let registry = borrow_global_mut<Registry>(@prompt_marketplace);
+        let store = borrow_global_mut<CollectionStore>(@prompt_marketplace);
         
         let collection_id = registry.next_collection_id;
         registry.next_collection_id = collection_id + 1;
         
-        move_to(sender, Collection {
+        let collection = Collection {
             id: collection_id,
             name,
             description,
             uri,
             total_supply: 0,
             max_supply,
-            mint_fee_per_nft,
+            mint_fee_per_prompt,
             creator_addr: sender_addr,
             public_mint_limit_per_addr,
             paused: false
-        });
+        };
 
-        // Initialize mint tracker
-        move_to(sender, MintTracker {
+        let mint_tracker = MintTracker {
             collection_id,
             mints_per_addr: vector::empty(),
-        });
+        };
 
-        move_to(sender, CollectionStats {
+        let collection_stats = CollectionStats {
             collection_id,
             total_volume: 0,
             num_holders: 0,
             floor_price: option::none(),
             last_mint_time: timestamp::now_seconds()
-        });
+        };
 
-        move_to(sender, CollectionEvents {
-            mint_events: account::new_event_handle<NFTMintedEvent>(sender),
-            batch_mint_events: account::new_event_handle<BatchNFTMintedEvent>(sender),
+        let collection_events = CollectionEvents {
+            mint_events: account::new_event_handle<PromptMintedEvent>(sender),
+            batch_mint_events: account::new_event_handle<BatchPromptMintedEvent>(sender),
             pause_events: account::new_event_handle<CollectionPausedEvent>(sender)
-        });
+        };
+
+        table::add(&mut store.collections, collection_id, collection);
+        table::add(&mut store.mint_trackers, collection_id, mint_tracker);
+        table::add(&mut store.collection_stats, collection_id, collection_stats);
+        table::add(&mut store.collection_events, collection_id, collection_events);
 
         vector::push_back(&mut registry.collections, collection_id);
         vector::push_back(&mut registry.collection_addr_map, CollectionAddrMap {
@@ -173,20 +197,19 @@ module prompt_marketplace::prompt_marketplace {
         });
     }
 
-    public entry fun mint_nft(
+    public entry fun mint_prompt(
         sender: &signer,
         collection_id: u64,
-    ) acquires Collection, MintTracker, Registry, CollectionStats, CollectionEvents {
+    ) acquires CollectionStore, UserPromptStore {
         let sender_addr = signer::address_of(sender);
+        let store = borrow_global_mut<CollectionStore>(@prompt_marketplace);
         
-        // Get collection address from registry
-        let collection_addr = get_collection_addr(collection_id);
-        assert!(collection_addr != @0x0, ECOLLECTION_NOT_FOUND);
-
-        let collection = borrow_global_mut<Collection>(collection_addr);
+        // Get collection from store
+        assert!(table::contains(&store.collections, collection_id), ECOLLECTION_NOT_FOUND);
+        let collection = table::borrow_mut(&mut store.collections, collection_id);
         assert!(!collection.paused, ECOLLECTION_PAUSED);
 
-        let mint_tracker = borrow_global_mut<MintTracker>(collection_addr);
+        let mint_tracker = table::borrow_mut(&mut store.mint_trackers, collection_id);
 
         // Validate minting conditions
         assert!(collection.total_supply < collection.max_supply, EMAX_SUPPLY_REACHED);
@@ -196,41 +219,49 @@ module prompt_marketplace::prompt_marketplace {
         assert!(user_mint_count < collection.public_mint_limit_per_addr, EMINT_LIMIT_EXCEEDED);
 
         // Handle payment
-        if (collection.mint_fee_per_nft > 0) {
-            coin::transfer<AptosCoin>(sender, collection.creator_addr, collection.mint_fee_per_nft);
+        if (collection.mint_fee_per_prompt > 0) {
+            coin::transfer<AptosCoin>(sender, collection.creator_addr, collection.mint_fee_per_prompt);
         };
 
-        // Create NFT
-        let nft = PromptNFT {
+        // Create Prompt
+        let prompt = Prompt {
             id: collection.total_supply + 1,
             collection_id: collection.id,
             collection_name: collection.name,
             description: collection.description,
             uri: collection.uri,
-            creator: collection_addr,
+            creator: collection.creator_addr,
             owner: sender_addr
         };
 
         // Update state
         collection.total_supply = collection.total_supply + 1;
         vector::push_back(&mut mint_tracker.mints_per_addr, sender_addr);
-        move_to(sender, nft);
+
+        // Initialize UserPromptStore if it doesn't exist
+        if (!exists<UserPromptStore>(sender_addr)) {
+            move_to(sender, UserPromptStore { prompts: vector::empty() });
+        };
+
+        // Add Prompt to user's store
+        let user_store = borrow_global_mut<UserPromptStore>(sender_addr);
+        vector::push_back(&mut user_store.prompts, prompt);
 
         // Update collection stats
-        let stats = borrow_global_mut<CollectionStats>(collection_addr);
-        stats.total_volume = stats.total_volume + collection.mint_fee_per_nft;
+        let stats = table::borrow_mut(&mut store.collection_stats, collection_id);
+        stats.total_volume = stats.total_volume + collection.mint_fee_per_prompt;
         stats.last_mint_time = timestamp::now_seconds();
-        if (collection.total_supply == 0) {
+        if (collection.total_supply == 1) {
             stats.num_holders = stats.num_holders + 1;
         };
 
         // Emit mint event
-        let events = borrow_global_mut<CollectionEvents>(collection_addr);
-        event::emit_event(&mut events.mint_events, NFTMintedEvent {
+        let events = table::borrow_mut(&mut store.collection_events, collection_id);
+        event::emit_event(&mut events.mint_events, PromptMintedEvent {
             collection_id,
-            token_id: collection.total_supply + 1,
+            prompt_id: collection.total_supply,
             recipient: sender_addr,
-            mint_price: collection.mint_fee_per_nft,
+            mint_price: collection.mint_fee_per_prompt,
             timestamp: timestamp::now_seconds()
         });
     }
@@ -252,27 +283,27 @@ module prompt_marketplace::prompt_marketplace {
 
     // View functions
     #[view]
-    public fun get_collection_info(collection_id: u64): (String, String, String, u64, u64, u64) acquires Collection, Registry {
-        let collection_addr = get_collection_addr(collection_id);
-        assert!(collection_addr != @0x0, ECOLLECTION_NOT_FOUND);
+    public fun get_collection_info(collection_id: u64): (String, String, String, u64, u64, u64) acquires CollectionStore {
+        let store = borrow_global<CollectionStore>(@prompt_marketplace);
+        assert!(table::contains(&store.collections, collection_id), ECOLLECTION_NOT_FOUND);
         
-        let collection = borrow_global<Collection>(collection_addr);
+        let collection = table::borrow(&store.collections, collection_id);
         (
             collection.name,
             collection.description,
             collection.uri,
             collection.total_supply,
             collection.max_supply,
-            collection.mint_fee_per_nft
+            collection.mint_fee_per_prompt
         )
     }
 
     #[view]
-    public fun get_mint_count(collection_id: u64, user_addr: address): u64 acquires MintTracker, Registry {
-        let collection_addr = get_collection_addr(collection_id);
-        assert!(collection_addr != @0x0, ECOLLECTION_NOT_FOUND);
+    public fun get_mint_count(collection_id: u64, user_addr: address): u64 acquires CollectionStore {
+        let store = borrow_global<CollectionStore>(@prompt_marketplace);
+        assert!(table::contains(&store.mint_trackers, collection_id), ECOLLECTION_NOT_FOUND);
         
-        let mint_tracker = borrow_global<MintTracker>(collection_addr);
+        let mint_tracker = table::borrow(&store.mint_trackers, collection_id);
         count_user_mints(&mint_tracker.mints_per_addr, user_addr)
     }
 
@@ -280,6 +311,27 @@ module prompt_marketplace::prompt_marketplace {
     public fun get_collections(): vector<u64> acquires Registry {
         let registry = borrow_global<Registry>(@prompt_marketplace);
         *&registry.collections
+    }
+
+    #[view]
+    public fun get_collections_with_details(): (vector<u64>, vector<String>) 
+        acquires Registry, CollectionStore {
+        let registry = borrow_global<Registry>(@prompt_marketplace);
+        let store = borrow_global<CollectionStore>(@prompt_marketplace);
+        
+        let collection_ids = *&registry.collections;
+        let uris = vector::empty();
+        
+        let i = 0;
+        let len = vector::length(&collection_ids);
+        while (i < len) {
+            let id = *vector::borrow(&collection_ids, i);
+            let collection = table::borrow(&store.collections, id);
+            vector::push_back(&mut uris, collection.uri);
+            i = i + 1;
+        };
+        
+        (collection_ids, uris)
     }
 
     // Helper function to count user mints
@@ -301,32 +353,70 @@ module prompt_marketplace::prompt_marketplace {
         sender: &signer,
         collection_id: u64,
         amount: u64
-    ) acquires Collection, MintTracker, Registry, CollectionStats, CollectionEvents {
+    ) acquires CollectionStore, UserPromptStore {
         assert!(amount > 0 && amount <= MAX_BATCH_MINT_SIZE, EBATCH_MINT_TOO_LARGE);
+        let sender_addr = signer::address_of(sender);
         
-        let collection_addr = get_collection_addr(collection_id);
-        assert!(collection_addr != @0x0, ECOLLECTION_NOT_FOUND);
+        let store = borrow_global_mut<CollectionStore>(@prompt_marketplace);
+        assert!(table::contains(&store.collections, collection_id), ECOLLECTION_NOT_FOUND);
         
-        let collection = borrow_global<Collection>(collection_addr);
+        let collection = table::borrow_mut(&mut store.collections, collection_id);
         assert!(!collection.paused, ECOLLECTION_PAUSED);
         assert!(collection.total_supply + amount <= collection.max_supply, EBATCH_MINT_EXCEEDS_SUPPLY);
 
-        let start_token_id = collection.total_supply + 1;
-        let total_mint_price = collection.mint_fee_per_nft * amount;
+        let mint_tracker = table::borrow_mut(&mut store.mint_trackers, collection_id);
+        let user_mint_count = count_user_mints(&mint_tracker.mints_per_addr, sender_addr);
+        assert!(user_mint_count + amount <= collection.public_mint_limit_per_addr, EMINT_LIMIT_EXCEEDED);
+
+        let start_prompt_id = collection.total_supply + 1;
+        let total_mint_price = collection.mint_fee_per_prompt * amount;
+
+        // Handle payment for all Prompts at once
+        if (collection.mint_fee_per_prompt > 0) {
+            coin::transfer<AptosCoin>(sender, collection.creator_addr, total_mint_price);
+        };
+
+        // Initialize UserPromptStore if it doesn't exist
+        if (!exists<UserPromptStore>(sender_addr)) {
+            move_to(sender, UserPromptStore { prompts: vector::empty() });
+        };
+        let user_store = borrow_global_mut<UserPromptStore>(sender_addr);
 
         let i = 0;
         while (i < amount) {
-            mint_nft(sender, collection_id);
+            // Create Prompt
+            let prompt = Prompt {
+                id: collection.total_supply + 1,
+                collection_id: collection.id,
+                collection_name: collection.name,
+                description: collection.description,
+                uri: collection.uri,
+                creator: collection.creator_addr,
+                owner: sender_addr
+            };
+
+            // Update state
+            collection.total_supply = collection.total_supply + 1;
+            vector::push_back(&mut mint_tracker.mints_per_addr, sender_addr);
+            vector::push_back(&mut user_store.prompts, prompt);
             i = i + 1;
         };
 
+        // Update collection stats
+        let stats = table::borrow_mut(&mut store.collection_stats, collection_id);
+        stats.total_volume = stats.total_volume + total_mint_price;
+        stats.last_mint_time = timestamp::now_seconds();
+        if (collection.total_supply - amount == 0) {
+            stats.num_holders = stats.num_holders + 1;
+        };
+
         // Emit batch mint event
-        let events = borrow_global_mut<CollectionEvents>(collection_addr);
-        event::emit_event(&mut events.batch_mint_events, BatchNFTMintedEvent {
+        let events = table::borrow_mut(&mut store.collection_events, collection_id);
+        event::emit_event(&mut events.batch_mint_events, BatchPromptMintedEvent {
             collection_id,
-            start_token_id,
-            end_token_id: start_token_id + amount - 1,
-            recipient: signer::address_of(sender),
+            start_prompt_id,
+            end_prompt_id: start_prompt_id + amount - 1,
+            recipient: sender_addr,
             total_mint_price,
             timestamp: timestamp::now_seconds()
         });
@@ -336,22 +426,43 @@ module prompt_marketplace::prompt_marketplace {
     public entry fun toggle_collection_pause(
         sender: &signer,
         collection_id: u64
-    ) acquires Collection, Registry, Config, CollectionEvents {
+    ) acquires CollectionStore, Config {
         let config = borrow_global<Config>(@prompt_marketplace);
         assert!(signer::address_of(sender) == config.admin_addr, EONLY_ADMIN);
 
-        let collection_addr = get_collection_addr(collection_id);
-        assert!(collection_addr != @0x0, ECOLLECTION_NOT_FOUND);
+        let store = borrow_global_mut<CollectionStore>(@prompt_marketplace);
+        assert!(table::contains(&store.collections, collection_id), ECOLLECTION_NOT_FOUND);
 
-        let collection = borrow_global_mut<Collection>(collection_addr);
+        let collection = table::borrow_mut(&mut store.collections, collection_id);
         collection.paused = !collection.paused;
 
         // Emit pause event
-        let events = borrow_global_mut<CollectionEvents>(collection_addr);
+        let events = table::borrow_mut(&mut store.collection_events, collection_id);
         event::emit_event(&mut events.pause_events, CollectionPausedEvent {
             collection_id,
             paused: collection.paused,
             timestamp: timestamp::now_seconds()
         });
+    }
+
+    // Add a view function to get user's prompts
+    #[view]
+    public fun get_user_prompts(user_addr: address): vector<u64> acquires UserPromptStore {
+        if (!exists<UserPromptStore>(user_addr)) {
+            return vector::empty()
+        };
+        
+        let store = borrow_global<UserPromptStore>(user_addr);
+        let prompt_ids = vector::empty();
+        let i = 0;
+        let len = vector::length(&store.prompts);
+        
+        while (i < len) {
+            let prompt = vector::borrow(&store.prompts, i);
+            vector::push_back(&mut prompt_ids, prompt.id);
+            i = i + 1;
+        };
+        
+        prompt_ids
     }
 }

@@ -62,7 +62,7 @@ const main = async () => {
       console.log('URI:', uri);
       console.log('Total Supply:', totalSupply);
       console.log('Max Supply:', maxSupply);
-      console.log('Mint Fee:', mintFee, 'MOVE');
+      console.log('Creation Fee:', mintFee, 'MOVE');
       return response;
     } catch (error) {
       console.error('Error viewing collection:', error);
@@ -80,19 +80,19 @@ const main = async () => {
       };
 
       const response = await client.view(payload);
-      console.log('\nYour mint count:', response[0]);
+      console.log('\nYour creation count:', response[0]);
       return Number(response[0]);
     } catch (error) {
-      console.error('Error getting mint count:', error);
+      console.error('Error getting creation count:', error);
       throw error;
     }
   }
 
-  // Mint NFT
-  async function mintNFT(collectionId: number) {
+  // Create prompt
+  async function createPrompt(collectionId: number) {
     try {
       const payload = {
-        function: `${MODULE_ADDRESS}::prompt_marketplace::mint_nft`,
+        function: `${MODULE_ADDRESS}::prompt_marketplace::mint_prompt`,
         type_arguments: [],
         arguments: [collectionId],
       };
@@ -104,15 +104,15 @@ const main = async () => {
       const signedTxn = await client.signTransaction(account, txnRequest);
       const txnResult = await client.submitTransaction(signedTxn);
 
-      console.log('\nMinting NFT...');
+      console.log('\nCreating prompt...');
       console.log('Transaction hash:', txnResult.hash);
 
       await client.waitForTransaction(txnResult.hash);
-      console.log('NFT minted successfully!');
+      console.log('Prompt created successfully!');
 
       return txnResult.hash;
     } catch (error) {
-      console.error('Error minting NFT:', error);
+      console.error('Error creating prompt:', error);
       throw error;
     }
   }
@@ -122,7 +122,7 @@ const main = async () => {
     const collections = await getAllCollections();
 
     if (!collections || collections.length === 0) {
-      console.log('No collections available to mint from.');
+      console.log('No collections available to create prompts from.');
       return;
     }
 
@@ -143,10 +143,10 @@ const main = async () => {
       userAddress
     );
 
-    console.log('\nProceeding with mint...');
-    const txHash = await mintNFT(selectedCollectionId);
+    console.log('\nProceeding with prompt creation...');
+    const txHash = await createPrompt(selectedCollectionId);
 
-    console.log('\nChecking updated mint count...');
+    console.log('\nChecking updated creation count...');
     await getMintCount(selectedCollectionId, userAddress);
   } catch (error) {
     console.error('\nError:', error);

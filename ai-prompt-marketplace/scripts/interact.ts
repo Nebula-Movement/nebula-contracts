@@ -51,12 +51,12 @@ const main = async () => {
         function: `${MODULE_ADDRESS}::prompt_marketplace::create_collection`,
         type_arguments: [],
         arguments: [
-          'My Collection', // name
+          'My Collection test', // name
           'A collection of amazing prompts', // description
           'https://example.com/collection', // uri
-          '1000000', // max_supply (1M tokens)
-          '1000000', // mint_fee_per_nft (1 MOVE)
-          '5', // public_mint_limit_per_addr
+          '1000000', // max_supply (1M prompts)
+          '100000000', // creation_fee_per_prompt (1 MOVE = 100000000 octas)
+          '5', // public_creation_limit_per_addr
         ],
       };
 
@@ -99,7 +99,7 @@ const main = async () => {
       };
 
       const response = await client.view(payload);
-      const [name, description, uri, totalSupply, maxSupply, mintFee] =
+      const [name, description, uri, totalSupply, maxSupply, creationFee] =
         response;
       console.log('Collection Info:');
       console.log('Name:', name);
@@ -107,7 +107,7 @@ const main = async () => {
       console.log('URI:', uri);
       console.log('Total Supply:', totalSupply);
       console.log('Max Supply:', maxSupply);
-      console.log('Mint Fee:', mintFee);
+      console.log('Creation Fee:', creationFee);
       return response;
     } catch (error) {
       console.error('Error viewing collection:', error);
@@ -115,7 +115,7 @@ const main = async () => {
     }
   }
 
-  async function getMintCount(collectionId: number, userAddress: string) {
+  async function getCreationCount(collectionId: number, userAddress: string) {
     try {
       const payload = {
         function: `${MODULE_ADDRESS}::prompt_marketplace::get_mint_count`,
@@ -124,38 +124,38 @@ const main = async () => {
       };
 
       const response = await client.view(payload);
-      console.log('Mint count for user:', response[0]);
+      console.log('Creation count for user:', response[0]);
       return Number(response[0]);
     } catch (error) {
-      console.error('Error getting mint count:', error);
+      console.error('Error getting creation count:', error);
       throw error;
     }
   }
 
-  async function mintNFT(collectionId: number) {
-    try {
-      const payload = {
-        function: `${MODULE_ADDRESS}::prompt_marketplace::mint_nft`,
-        type_arguments: [],
-        arguments: [collectionId],
-      };
+  // async function createPrompt(collectionId: number) {
+  //   try {
+  //     const payload = {
+  //       function: `${MODULE_ADDRESS}::prompt_marketplace::mint_prompt`,
+  //       type_arguments: [],
+  //       arguments: [collectionId],
+  //     };
 
-      const txnRequest = await client.generateTransaction(
-        account.address(),
-        payload
-      );
-      const signedTxn = await client.signTransaction(account, txnRequest);
-      const txnResult = await client.submitTransaction(signedTxn);
-      await client.waitForTransaction(txnResult.hash);
+  //     const txnRequest = await client.generateTransaction(
+  //       account.address(),
+  //       payload
+  //     );
+  //     const signedTxn = await client.signTransaction(account, txnRequest);
+  //     const txnResult = await client.submitTransaction(signedTxn);
+  //     await client.waitForTransaction(txnResult.hash);
 
-      console.log('NFT minted successfully!');
-      console.log('Transaction hash:', txnResult.hash);
-      return txnResult.hash;
-    } catch (error) {
-      console.error('Error minting NFT:', error);
-      throw error;
-    }
-  }
+  //     console.log('Prompt created successfully!');
+  //     console.log('Transaction hash:', txnResult.hash);
+  //     return txnResult.hash;
+  //   } catch (error) {
+  //     console.error('Error creating prompt:', error);
+  //     throw error;
+  //   }
+  // }
 
   try {
     console.log('\nCreating collection...');
@@ -166,16 +166,16 @@ const main = async () => {
     console.log('\nGetting collection info...');
     await viewCollectionInfo(collectionId);
 
-    console.log('\nGetting mint count...');
-    await getMintCount(collectionId, account.address().hex());
+    console.log('\nGetting creation count...');
+    await getCreationCount(collectionId, account.address().hex());
 
     console.log('\nListing all collections...');
     const allCollections = await getAllCollections();
     console.log('All collection IDs:', allCollections);
 
-    // Uncomment to mint an NFT
-    // console.log('\nMinting NFT...');
-    // await mintNFT(collectionId);
+    // Uncomment to create a prompt
+    // console.log('\nCreating prompt...');
+    // await createPrompt(collectionId);
   } catch (error) {
     console.error('Error:', error);
   }
